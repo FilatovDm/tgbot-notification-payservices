@@ -32,6 +32,7 @@ class AddSubscriptionStates(StatesGroup):
     currency = State()
     next_payment_date = State()
     periodicity = State()
+    auto_renew = State()
 
 
 class EditSubscriptionStates(StatesGroup):
@@ -116,17 +117,22 @@ async def show_subscriptions(message: Message) -> None:
             date_human = next_payment_dt.strftime("%d-%m-%Y")
 
         date_prefix = ""
-        if days_left == 7:
+        if next_payment_dt and next_payment_dt < today:
+            date_prefix = "❌ "
+        elif days_left == 7:
             date_prefix = "⚠️ "
 
         currency = sub.get("currency") or "RUB"
+        auto_renew = bool(sub.get("auto_renew"))
+        auto_renew_human = "да" if auto_renew else "нет"
         lines.append(
             f"\n<b>ID:</b> {sub['id']}\n"
             f"<b>Сервис:</b> {sub['service_name']}\n"
             f"<b>Сумма:</b> {sub['amount']:.2f} {currency}\n"
             f"<b>До списания:</b> {days_left_display} дней\n"
             f"<b>Следующее списание:</b> {date_prefix}{date_human}\n"
-            f"<b>Периодичность:</b> {period_human}"
+            f"<b>Периодичность:</b> {period_human}\n"
+            f"<b>Автопродление:</b> {auto_renew_human}"
         )
 
     await message.answer("\n".join(lines))
@@ -227,6 +233,29 @@ async def add_subscription_periodicity(callback: CallbackQuery, state: FSMContex
         return
 
     periodicity = callback.data.split(":", maxsplit=1)[1]
+    await state.update_data(periodicity=periodicity)
+    await state.set_state(AddSubscriptionStates.auto_renew)
+
+    kb = InlineKeyboardBuilder()
+    kb.button(text="Да", callback_data="auto_renew:yes")
+    kb.button(text="Нет", callback_data="auto_renew:no")
+    kb.adjust(2)
+
+    await callback.message.edit_text(
+        "Включить автопродление после списания?", reply_markup=kb.as_markup()
+    )
+    await callback.answer()
+
+
+@router.callback_query(AddSubscriptionStates.auto_renew, F.data.startswith("auto_renew:"))
+async def add_subscription_auto_renew(callback: CallbackQuery, state: FSMContext) -> None:
+    if not _admin_only_callback(callback):
+        await callback.answer()
+        return
+
+    choice = callback.data.split(":", maxsplit=1)[1]
+    auto_renew = choice == "yes"
+
     data = await state.get_data()
 
     await add_subscription(
@@ -234,12 +263,13 @@ async def add_subscription_periodicity(callback: CallbackQuery, state: FSMContex
         amount=data["amount"],
         currency=data["currency"],
         next_payment_date=data["next_payment_date"],
-        periodicity=periodicity,
+        periodicity=data["periodicity"],
+        auto_renew=auto_renew,
     )
 
     await state.clear()
-    await callback.message.edit_reply_markup(reply_markup=None)
-    await callback.message.answer("✅ Подписка успешно добавлена.", reply_markup=MAIN_MENU_KB)
+    await callback.message.edit_text("✅ Подписка успешно добавлена.")
+    await callback.message.answer("Выберите действие:", reply_markup=MAIN_MENU_KB)
     await callback.answer()
 
 
@@ -294,7 +324,8 @@ async def edit_subscription_choose(callback: CallbackQuery, state: FSMContext) -
     kb.button(text="Валюта", callback_data="edit_field:currency")
     kb.button(text="Дата", callback_data="edit_field:next_payment_date")
     kb.button(text="Периодичность", callback_data="edit_field:periodicity")
-    kb.adjust(2, 2, 1)
+    kb.button(text="Автопродление", callback_data="edit_field:auto_renew")
+    kb.adjust(2, 2, 2)
 
     await callback.message.edit_text(
         f"Вы выбрали подписку:\n"
@@ -328,6 +359,14 @@ async def edit_subscription_choose_field(callback: CallbackQuery, state: FSMCont
         kb.button(text="USD", callback_data="edit_currency:USD")
         kb.adjust(2)
         await callback.message.edit_text("Выберите новую валюту:", reply_markup=kb.as_markup())
+    elif field == "auto_renew":
+        kb = InlineKeyboardBuilder()
+        kb.button(text="Включить", callback_data="edit_auto_renew:yes")
+        kb.button(text="Выключить", callback_data="edit_auto_renew:no")
+        kb.adjust(2)
+        await callback.message.edit_text(
+            "Выберите состояние автопродления:", reply_markup=kb.as_markup()
+        )
     else:
         await callback.message.edit_text(
             "Введите новое значение:\n"
@@ -383,6 +422,33 @@ async def edit_subscription_currency(callback: CallbackQuery, state: FSMContext)
     await state.clear()
 
     await callback.message.edit_text("✅ Валюта обновлена.", reply_markup=None)
+    await callback.answer()
+
+
+@router.callback_query(EditSubscriptionStates.choosing_field, F.data.startswith("edit_auto_renew:"))
+async def edit_subscription_auto_renew(callback: CallbackQuery, state: FSMContext) -> None:
+    if not _admin_only_callback(callback):
+        await callback.answer()
+        return
+
+    data = await state.get_data()
+    sub_id = data.get("subscription_id")
+    if sub_id is None:
+        await callback.answer("Состояние устарело, начните заново.", show_alert=True)
+        await state.clear()
+        return
+
+    choice = callback.data.split(":", maxsplit=1)[1]
+    auto_renew = 1 if choice == "yes" else 0
+
+    await update_subscription_field(
+        subscription_id=sub_id,
+        field="auto_renew",
+        value=auto_renew,
+    )
+    await state.clear()
+
+    await callback.message.edit_text("✅ Автопродление обновлено.", reply_markup=None)
     await callback.answer()
 
 

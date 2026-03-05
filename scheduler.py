@@ -31,6 +31,7 @@ async def _process_subscription(bot: Bot, sub: Dict[str, Any]) -> None:
     amount = sub["amount"]
     currency = sub.get("currency") or "RUB"
     periodicity = sub["periodicity"]
+    auto_renew = bool(sub.get("auto_renew"))
 
     try:
         next_payment = date.fromisoformat(sub["next_payment_date"])
@@ -59,8 +60,8 @@ async def _process_subscription(bot: Bot, sub: Dict[str, Any]) -> None:
         )
         await bot.send_message(chat_id=group_chat_id, text=text)
 
-    # Если дата наступила или прошла — переносим на следующий период.
-    if next_payment <= today:
+    # Если дата наступила или прошла — переносим на следующий период ТОЛЬКО при включённом автопродлении.
+    if auto_renew and next_payment <= today:
         delta = PERIODICITY_TO_DELTA.get(periodicity)
         if not delta:
             return
