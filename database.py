@@ -5,6 +5,9 @@ from typing import Any, Dict, List, Optional
 
 DB_PATH = "subscriptions.db"
 
+DEFAULT_CURRENCY = "RUB"
+USD_SERVICES = {"HeyGen", "Make"}
+
 
 async def init_db() -> None:
     """
@@ -17,6 +20,7 @@ async def init_db() -> None:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 service_name TEXT NOT NULL,
                 amount REAL NOT NULL,
+                currency TEXT NOT NULL DEFAULT 'RUB',
                 next_payment_date TEXT NOT NULL, -- формат YYYY-MM-DD
                 periodicity TEXT NOT NULL        -- '1_month', '3_months', '6_months', '1_year'
             )
@@ -24,20 +28,43 @@ async def init_db() -> None:
         )
         await db.commit()
 
+        # Миграция для существующих БД: добавляем колонку currency при необходимости.
+        cursor = await db.execute("PRAGMA table_info(subscriptions)")
+        columns = {row[1] for row in await cursor.fetchall()}  # row[1] = name
+        currency_added = False
+        if "currency" not in columns:
+            await db.execute(
+                "ALTER TABLE subscriptions ADD COLUMN currency TEXT NOT NULL DEFAULT 'RUB'"
+            )
+            currency_added = True
+            await db.commit()
+
+        # Заполняем валюту для старых записей при первой миграции.
+        if currency_added:
+            await db.execute(
+                "UPDATE subscriptions SET currency = ?",
+                (DEFAULT_CURRENCY,),
+            )
+            await db.execute(
+                "UPDATE subscriptions SET currency = 'USD' WHERE service_name IN ('HeyGen', 'Make')"
+            )
+            await db.commit()
+
 
 async def add_subscription(
     service_name: str,
     amount: float,
+    currency: str,
     next_payment_date: str,
     periodicity: str,
 ) -> int:
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
             """
-            INSERT INTO subscriptions (service_name, amount, next_payment_date, periodicity)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO subscriptions (service_name, amount, currency, next_payment_date, periodicity)
+            VALUES (?, ?, ?, ?, ?)
             """,
-            (service_name, amount, next_payment_date, periodicity),
+            (service_name, amount, currency, next_payment_date, periodicity),
         )
         await db.commit()
         return cursor.lastrowid
@@ -48,7 +75,7 @@ async def get_all_subscriptions() -> List[Dict[str, Any]]:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             """
-            SELECT id, service_name, amount, next_payment_date, periodicity
+            SELECT id, service_name, amount, currency, next_payment_date, periodicity
             FROM subscriptions
             ORDER BY next_payment_date ASC
             """
@@ -62,7 +89,7 @@ async def get_subscription(subscription_id: int) -> Optional[Dict[str, Any]]:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             """
-            SELECT id, service_name, amount, next_payment_date, periodicity
+            SELECT id, service_name, amount, currency, next_payment_date, periodicity
             FROM subscriptions
             WHERE id = ?
             """,
@@ -77,7 +104,7 @@ async def update_subscription_field(
     field: str,
     value: Any,
 ) -> None:
-    if field not in {"service_name", "amount", "next_payment_date", "periodicity"}:
+    if field not in {"service_name", "amount", "currency", "next_payment_date", "periodicity"}:
         raise ValueError(f"Invalid field to update: {field}")
 
     async with aiosqlite.connect(DB_PATH) as db:

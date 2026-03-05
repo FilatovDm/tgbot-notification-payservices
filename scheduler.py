@@ -1,14 +1,15 @@
 from __future__ import annotations
 
-from datetime import date, datetime
-from typing import Dict, Any
+from datetime import date, timedelta, timezone
+from typing import Any, Dict
 
 from aiogram import Bot
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from dateutil.relativedelta import relativedelta
+from zoneinfo import ZoneInfo
 
 from config import get_settings
 from database import get_all_subscriptions, update_subscription_field
+from dateutil.relativedelta import relativedelta
 
 
 PERIODICITY_TO_DELTA: Dict[str, relativedelta] = {
@@ -18,6 +19,8 @@ PERIODICITY_TO_DELTA: Dict[str, relativedelta] = {
     "1_year": relativedelta(years=1),
 }
 
+NOTIFY_DAYS = (3, 2, 1, 0)
+
 
 async def _process_subscription(bot: Bot, sub: Dict[str, Any]) -> None:
     settings = get_settings()
@@ -26,6 +29,7 @@ async def _process_subscription(bot: Bot, sub: Dict[str, Any]) -> None:
     sub_id = sub["id"]
     service_name = sub["service_name"]
     amount = sub["amount"]
+    currency = sub.get("currency") or "RUB"
     periodicity = sub["periodicity"]
 
     try:
@@ -37,16 +41,21 @@ async def _process_subscription(bot: Bot, sub: Dict[str, Any]) -> None:
     today = date.today()
     days_diff = (next_payment - today).days
 
-    if days_diff == 3:
+    payment_date_human = next_payment.strftime("%d-%m-%Y")
+
+    if days_diff in NOTIFY_DAYS:
+        if days_diff == 3:
+            prefix = "⚠️ Напоминание: Через 3 дня"
+        elif days_diff == 2:
+            prefix = "⚠️ Напоминание: Через 2 дня"
+        elif days_diff == 1:
+            prefix = "🚨 ВНИМАНИЕ: Завтра"
+        else:
+            prefix = "💳 Сегодня"
+
         text = (
-            f"⚠️ Напоминание: Через 3 дня ({next_payment:%Y-%m-%d}) "
-            f"списание за <b>{service_name}</b> - <b>{amount:.2f}</b>"
-        )
-        await bot.send_message(chat_id=group_chat_id, text=text)
-    elif days_diff == 1:
-        text = (
-            f"🚨 ВНИМАНИЕ: Завтра ({next_payment:%Y-%m-%d}) "
-            f"списание за <b>{service_name}</b> - <b>{amount:.2f}</b>"
+            f"{prefix} ({payment_date_human}) списание за <b>{service_name}</b> - "
+            f"<b>{amount:.2f} {currency}</b>"
         )
         await bot.send_message(chat_id=group_chat_id, text=text)
 
@@ -77,17 +86,25 @@ async def check_subscriptions_and_notify(bot: Bot) -> None:
         await _process_subscription(bot, sub)
 
 
+def _get_moscow_tzinfo():
+    # На Windows может отсутствовать IANA tz database, поэтому есть fallback на фиксированный UTC+3.
+    try:
+        return ZoneInfo("Europe/Moscow")
+    except Exception:
+        return timezone(timedelta(hours=3))
+
+
 def setup_scheduler(scheduler: AsyncIOScheduler, bot: Bot) -> None:
     """
-    Регистрирует ежедневное задание в 10:00.
+    Регистрирует ежедневное задание в 10:00 по МСК.
     """
-    # Время можно скорректировать под ваш часовой пояс, по умолчанию APScheduler
-    # использует локальный timezone или указанный при создании.
+    msk = _get_moscow_tzinfo()
     scheduler.add_job(
         check_subscriptions_and_notify,
         "cron",
         hour=10,
         minute=0,
+        timezone=msk,
         args=[bot],
         id="subscriptions_notifier",
         replace_existing=True,

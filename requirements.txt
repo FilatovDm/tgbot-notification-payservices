@@ -3,3 +3,4 @@ aiosqlite~=0.20.0
 APScheduler~=3.10.4
 python-dotenv~=1.0.1
 python-dateutil~=2.9.0.post0
+tzdata

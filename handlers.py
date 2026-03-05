@@ -29,6 +29,7 @@ router = Router()
 class AddSubscriptionStates(StatesGroup):
     service_name = State()
     amount = State()
+    currency = State()
     next_payment_date = State()
     periodicity = State()
 
@@ -85,24 +86,46 @@ async def show_subscriptions(message: Message) -> None:
     if not _admin_only_message(message):
         return
 
+    from datetime import date
+
     subscriptions = await get_all_subscriptions()
     if not subscriptions:
         await message.answer("Пока нет ни одной подписки.")
         return
 
     lines = ["📋 <b>Список подписок</b>:"]
+    today = date.today()
     for sub in subscriptions:
+        try:
+            next_payment_dt = date.fromisoformat(sub["next_payment_date"])
+        except ValueError:
+            next_payment_dt = None
+
+        days_left = None if not next_payment_dt else (next_payment_dt - today).days
+        days_left_display = "—" if days_left is None else str(max(days_left, 0))
+
         period_human = {
             "1_month": "1 месяц",
             "3_months": "3 месяца",
             "6_months": "6 месяцев",
             "1_year": "1 год",
         }.get(sub["periodicity"], sub["periodicity"])
+
+        date_human = sub["next_payment_date"]
+        if next_payment_dt:
+            date_human = next_payment_dt.strftime("%d-%m-%Y")
+
+        date_prefix = ""
+        if days_left == 7:
+            date_prefix = "⚠️ "
+
+        currency = sub.get("currency") or "RUB"
         lines.append(
             f"\n<b>ID:</b> {sub['id']}\n"
             f"<b>Сервис:</b> {sub['service_name']}\n"
-            f"<b>Сумма:</b> {sub['amount']:.2f}\n"
-            f"<b>Следующее списание:</b> {sub['next_payment_date']}\n"
+            f"<b>Сумма:</b> {sub['amount']:.2f} {currency}\n"
+            f"<b>До списания:</b> {days_left_display} дней\n"
+            f"<b>Следующее списание:</b> {date_prefix}{date_human}\n"
             f"<b>Периодичность:</b> {period_human}"
         )
 
@@ -143,8 +166,31 @@ async def add_subscription_amount(message: Message, state: FSMContext) -> None:
         return
 
     await state.update_data(amount=amount)
+    await state.set_state(AddSubscriptionStates.currency)
+
+    kb = InlineKeyboardBuilder()
+    kb.button(text="RUB", callback_data="currency:RUB")
+    kb.button(text="USD", callback_data="currency:USD")
+    kb.adjust(2)
+    await message.answer("Выберите валюту:", reply_markup=kb.as_markup())
+
+
+@router.callback_query(AddSubscriptionStates.currency, F.data.startswith("currency:"))
+async def add_subscription_currency(callback: CallbackQuery, state: FSMContext) -> None:
+    if not _admin_only_callback(callback):
+        await callback.answer()
+        return
+
+    currency = callback.data.split(":", maxsplit=1)[1].upper()
+    if currency not in {"RUB", "USD"}:
+        await callback.answer("Неизвестная валюта", show_alert=True)
+        return
+
+    await state.update_data(currency=currency)
     await state.set_state(AddSubscriptionStates.next_payment_date)
-    await message.answer("Введите дату следующего списания в формате YYYY-MM-DD:")
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.message.answer("Введите дату следующего списания в формате YYYY-MM-DD:")
+    await callback.answer()
 
 
 @router.message(AddSubscriptionStates.next_payment_date)
@@ -186,6 +232,7 @@ async def add_subscription_periodicity(callback: CallbackQuery, state: FSMContex
     await add_subscription(
         service_name=data["service_name"],
         amount=data["amount"],
+        currency=data["currency"],
         next_payment_date=data["next_payment_date"],
         periodicity=periodicity,
     )
@@ -244,9 +291,10 @@ async def edit_subscription_choose(callback: CallbackQuery, state: FSMContext) -
     kb = InlineKeyboardBuilder()
     kb.button(text="Название", callback_data="edit_field:service_name")
     kb.button(text="Сумма", callback_data="edit_field:amount")
+    kb.button(text="Валюта", callback_data="edit_field:currency")
     kb.button(text="Дата", callback_data="edit_field:next_payment_date")
     kb.button(text="Периодичность", callback_data="edit_field:periodicity")
-    kb.adjust(2, 2)
+    kb.adjust(2, 2, 1)
 
     await callback.message.edit_text(
         f"Вы выбрали подписку:\n"
@@ -274,6 +322,12 @@ async def edit_subscription_choose_field(callback: CallbackQuery, state: FSMCont
         kb.button(text="1 год", callback_data="edit_period:1_year")
         kb.adjust(2, 2)
         await callback.message.edit_text("Выберите новую периодичность:", reply_markup=kb.as_markup())
+    elif field == "currency":
+        kb = InlineKeyboardBuilder()
+        kb.button(text="RUB", callback_data="edit_currency:RUB")
+        kb.button(text="USD", callback_data="edit_currency:USD")
+        kb.adjust(2)
+        await callback.message.edit_text("Выберите новую валюту:", reply_markup=kb.as_markup())
     else:
         await callback.message.edit_text(
             "Введите новое значение:\n"
@@ -304,6 +358,31 @@ async def edit_subscription_period(callback: CallbackQuery, state: FSMContext) -
     await state.clear()
 
     await callback.message.edit_text("✅ Периодичность обновлена.", reply_markup=None)
+    await callback.answer()
+
+
+@router.callback_query(EditSubscriptionStates.choosing_field, F.data.startswith("edit_currency:"))
+async def edit_subscription_currency(callback: CallbackQuery, state: FSMContext) -> None:
+    if not _admin_only_callback(callback):
+        await callback.answer()
+        return
+
+    data = await state.get_data()
+    sub_id = data.get("subscription_id")
+    if sub_id is None:
+        await callback.answer("Состояние устарело, начните заново.", show_alert=True)
+        await state.clear()
+        return
+
+    currency = callback.data.split(":", maxsplit=1)[1].upper()
+    if currency not in {"RUB", "USD"}:
+        await callback.answer("Неизвестная валюта", show_alert=True)
+        return
+
+    await update_subscription_field(subscription_id=sub_id, field="currency", value=currency)
+    await state.clear()
+
+    await callback.message.edit_text("✅ Валюта обновлена.", reply_markup=None)
     await callback.answer()
 
 
