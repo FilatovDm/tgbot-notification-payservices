@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import aiosqlite
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-DB_PATH = "subscriptions.db"
+DB_PATH = Path(__file__).resolve().with_name("subscriptions.db")
 
 DEFAULT_CURRENCY = "RUB"
 USD_SERVICES = {"HeyGen", "Make"}
@@ -13,7 +14,7 @@ async def init_db() -> None:
     """
     Инициализация БД и создание таблицы subscriptions при первом запуске.
     """
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(str(DB_PATH)) as db:
         await db.execute(
             """
             CREATE TABLE IF NOT EXISTS subscriptions (
@@ -69,7 +70,7 @@ async def add_subscription(
     periodicity: str,
     auto_renew: bool = False,
 ) -> int:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(str(DB_PATH)) as db:
         cursor = await db.execute(
             """
             INSERT INTO subscriptions (service_name, amount, currency, next_payment_date, periodicity, auto_renew)
@@ -82,7 +83,7 @@ async def add_subscription(
 
 
 async def get_all_subscriptions() -> List[Dict[str, Any]]:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(str(DB_PATH)) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             """
@@ -102,7 +103,7 @@ async def get_all_subscriptions() -> List[Dict[str, Any]]:
 
 
 async def get_subscription(subscription_id: int) -> Optional[Dict[str, Any]]:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(str(DB_PATH)) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             """
@@ -137,7 +138,7 @@ async def update_subscription_field(
     }:
         raise ValueError(f"Invalid field to update: {field}")
 
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(str(DB_PATH)) as db:
         await db.execute(
             f"UPDATE subscriptions SET {field} = ? WHERE id = ?",
             (value, subscription_id),
@@ -146,7 +147,7 @@ async def update_subscription_field(
 
 
 async def delete_subscription(subscription_id: int) -> None:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(str(DB_PATH)) as db:
         await db.execute(
             "DELETE FROM subscriptions WHERE id = ?",
             (subscription_id,),

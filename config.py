@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import lru_cache
+from pathlib import Path
 from typing import List
 
 import os
@@ -22,7 +23,7 @@ def get_settings() -> Settings:
     Загрузка настроек из .env.
     ADMIN_IDS парсится как список int, разделитель — запятая.
     """
-    load_dotenv()
+    load_dotenv(dotenv_path=Path(__file__).resolve().with_name(".env"))
 
     bot_token = os.getenv("BOT_TOKEN")
     if not bot_token:
