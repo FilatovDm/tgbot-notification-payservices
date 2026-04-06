@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from aiogram import F, Router
@@ -13,6 +14,7 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from zoneinfo import ZoneInfo
 
 from config import is_admin
 from database import (
@@ -24,6 +26,18 @@ from database import (
 )
 
 router = Router()
+
+
+def _get_moscow_tzinfo():
+    # На Windows может отсутствовать IANA tz database, поэтому есть fallback на фиксированный UTC+3.
+    try:
+        return ZoneInfo("Europe/Moscow")
+    except Exception:
+        return timezone(timedelta(hours=3))
+
+
+def _get_moscow_date():
+    return datetime.now(_get_moscow_tzinfo()).date()
 
 
 class AddSubscriptionStates(StatesGroup):
@@ -95,7 +109,7 @@ async def show_subscriptions(message: Message) -> None:
         return
 
     lines = ["📋 <b>Список подписок</b>:"]
-    today = date.today()
+    today = _get_moscow_date()
     for sub in subscriptions:
         try:
             next_payment_dt = date.fromisoformat(sub["next_payment_date"])
@@ -119,8 +133,10 @@ async def show_subscriptions(message: Message) -> None:
         date_prefix = ""
         if next_payment_dt and next_payment_dt < today:
             date_prefix = "❌ "
-        elif days_left == 7:
+        elif days_left is not None and 2 <= days_left <= 7:
             date_prefix = "⚠️ "
+        elif days_left is not None and 0 <= days_left <= 1:
+            date_prefix = "🚨 "
 
         currency = sub.get("currency") or "RUB"
         auto_renew = bool(sub.get("auto_renew"))
