@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict
 
 from aiogram import Bot
@@ -39,7 +39,7 @@ async def _process_subscription(bot: Bot, sub: Dict[str, Any]) -> None:
         # Неверный формат даты — пропускаем запись.
         return
 
-    today = date.today()
+    today = _get_moscow_date()
     days_diff = (next_payment - today).days
 
     payment_date_human = next_payment.strftime("%d-%m-%Y")
@@ -93,6 +93,10 @@ def _get_moscow_tzinfo():
         return ZoneInfo("Europe/Moscow")
     except Exception:
         return timezone(timedelta(hours=3))
+
+
+def _get_moscow_date() -> date:
+    return datetime.now(_get_moscow_tzinfo()).date()
 
 
 def setup_scheduler(scheduler: AsyncIOScheduler, bot: Bot) -> None:
